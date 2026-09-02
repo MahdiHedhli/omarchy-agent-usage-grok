@@ -1,5 +1,5 @@
 [Unit]
-Description=Refresh Omarchy Grok agent usage record
+Description=Refresh Omarchy Grok and Cursor agent usage records
 After=network-online.target
 
 [Service]

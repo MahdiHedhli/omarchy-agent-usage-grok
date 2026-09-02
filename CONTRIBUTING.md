@@ -1,8 +1,11 @@
 # Contributing
 
-This repository is a standalone Grok usage collector. The code that belongs
-in Omarchy is `bin/omarchy-agent-usage-grok` (plus tests and optional SVG
-assets). Do not treat this repo as a plugin marketplace listing.
+This repository is a standalone Grok (and Cursor) usage collector. The code
+that belongs in Omarchy is `bin/omarchy-agent-usage-grok` and
+`bin/omarchy-agent-usage-cursor` (plus tests and optional SVG assets). Do
+not treat this repo as a plugin marketplace listing. Compact bar meters
+belong in a separate package; they cannot land upstream without changing
+the built-in `omarchy.agents` widget.
 
 ## Omarchy channels
 
@@ -28,6 +31,7 @@ reviewing or extending the leading PR over opening another parallel one.
 
 ```bash
 ./test/agent-usage-grok-scanner-test.sh
+./test/agent-usage-cursor-test.sh
 ```
 
 Keep tests fixture-only. Do not commit `~/.grok`, `auth.json`, usage records,

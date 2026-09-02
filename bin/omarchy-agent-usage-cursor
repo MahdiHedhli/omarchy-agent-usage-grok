@@ -1,0 +1,843 @@
+#!/usr/bin/python3
+# omarchy:summary=Print the Cursor usage record as JSON
+# omarchy:args=[--force] [--limits-only] [--probe]
+# omarchy:hidden=true
+"""Collect Cursor plan usage into one display-ready JSON record.
+
+Reads the Cursor CLI auth.json and/or IDE state.vscdb, then asks
+Cursor's DashboardService for monthly Cursor Models / Other Models
+percent used. The Grok token is never sent to Cursor. Account email
+is never written into the printed record.
+
+Adapted from the grokbar-omarchy Cursor scanner (MIT).
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import math
+import os
+import sqlite3
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+
+DEFAULT_AUTH = Path.home() / ".config" / "cursor" / "auth.json"
+DEFAULT_CLI_CONFIG = Path.home() / ".config" / "cursor" / "cli-config.json"
+DEFAULT_GROK_AUTH = Path.home() / ".grok" / "auth.json"
+DEFAULT_STATE_DB = (
+  Path.home() / ".config" / "Cursor" / "User" / "globalStorage" / "state.vscdb"
+)
+API_BASE = "https://api2.cursor.sh/aiserver.v1.DashboardService"
+TOKEN_URL = "https://api2.cursor.sh/oauth/token"
+CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
+CURSOR_ISS = "https://authentication.cursor.sh"
+USER_AGENT = "omarchy-agent-usage-cursor/1.0"
+REFRESH_SKEW_SEC = 120
+
+ALLOWED_JWT_TYPES = frozenset({"session", "web"})
+X_PROVIDERS = frozenset({
+  "twitter",
+  "twitter-oauth",
+  "twitter-oauth-2",
+  "twitter-oauth2",
+  "x",
+  "x-oauth",
+  "x-oauth2",
+  "oauth_twitter",
+})
+
+
+def recent_date_strings():
+  today = datetime.now().date()
+  return [(today - timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(6, -1, -1)]
+
+
+def empty_result(**overrides):
+  out = {
+    "schemaVersion": 1,
+    "id": "cursor",
+    "name": "Cursor",
+    "ready": False,
+    "hasLocalStats": True,
+    "hasPromptStats": False,
+    "todayPrompts": 0,
+    "todaySessions": 0,
+    "todayTotalTokens": 0,
+    "todayTokensByModel": {},
+    "recentDays": [{"date": day, "messageCount": 0} for day in recent_date_strings()],
+    "totalPrompts": 0,
+    "totalSessions": 0,
+    "activeDays": 0,
+    "activeDates": [],
+    "modelUsage": {},
+    "limits": [],
+    "tierLabel": "",
+    "usageStatusText": "",
+    "authHelpText": "",
+  }
+  out.update(overrides)
+  return out
+
+
+def expand_path(value, default):
+  text = str(value or "").strip()
+  if not text:
+    return default
+  return Path(os.path.expanduser(text)).expanduser()
+
+
+def emit(payload):
+  out = dict(payload)
+  out["updatedAt"] = datetime.now(timezone.utc).isoformat()
+  print(json.dumps(out, separators=(",", ":"), sort_keys=True))
+  return 0
+
+
+# Qt Text defaults to AutoText and will fetch <img src="...">. Display fields
+# from Cursor APIs must stay plain text even if a QML caller forgets textFormat.
+_RESOURCE_MARKUP = (
+  "<img", "<image", "<object", "<embed", "<iframe", "<frame",
+  "<link", "<meta", "<base", "<source", "<svg", "<script", "<style",
+)
+
+
+def plain_text(value, max_len=128):
+  text = str(value or "").replace("\x00", "").strip()
+  if not text:
+    return ""
+  compact = "".join(text.lower().split())
+  for tag in _RESOURCE_MARKUP:
+    if tag in compact:
+      return ""
+  if len(text) > max_len:
+    return text[:max_len].rstrip()
+  return text
+
+
+def parse_iso(value):
+  text = str(value or "").strip()
+  if not text:
+    return None
+  try:
+    if text.endswith("Z"):
+      text = text[:-1] + "+00:00"
+    dt = datetime.fromisoformat(text)
+    if dt.tzinfo is None:
+      dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+  except Exception:
+    return None
+
+
+def to_iso(dt):
+  if dt is None:
+    return ""
+  return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def decode_jwt(token):
+  text = str(token or "").strip()
+  if not text:
+    return None
+  parts = text.split(".")
+  if len(parts) < 2:
+    return None
+  try:
+    pad = "=" * (-len(parts[1]) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(parts[1] + pad))
+  except Exception:
+    return None
+  return payload if isinstance(payload, dict) else None
+
+
+def jwt_provider_and_sub(payload):
+  sub = str((payload or {}).get("sub") or "").strip()
+  if not sub:
+    return "", ""
+  return sub.split("|", 1)[0].strip().lower(), sub
+
+
+def accept_cursor_x_jwt(token):
+  """Return (ok, provider, subject, payload) for any Cursor session/web JWT."""
+  payload = decode_jwt(token)
+  if not payload:
+    return False, "", "", None
+  iss = str(payload.get("iss") or "").strip()
+  if iss != CURSOR_ISS:
+    return False, "", "", payload
+  typ = str(payload.get("type") or "").strip().lower()
+  if typ not in ALLOWED_JWT_TYPES:
+    return False, "", "", payload
+  provider, sub = jwt_provider_and_sub(payload)
+  return True, provider or "cursor", sub, payload
+
+
+def signup_is_google(value):
+  return str(value or "").strip().lower() == "google"
+
+
+def signup_is_x(value):
+  text = str(value or "").strip().lower().replace(" ", "-")
+  if not text:
+    return False
+  if text in {"x", "x.com", "twitter"}:
+    return True
+  return text.startswith("twitter") or text.startswith("x-oauth")
+
+
+def normalize_email(value):
+  return str(value or "").strip().lower()
+
+
+def emails_match(left, right):
+  a = normalize_email(left)
+  b = normalize_email(right)
+  return bool(a and b and a == b)
+
+
+def load_grok_email(grok_auth_path):
+  """Email on the Grok/xAI OIDC sidecar — the user's X login identity."""
+  if not grok_auth_path.is_file():
+    return ""
+  try:
+    data = json.loads(grok_auth_path.read_text(encoding="utf-8"))
+  except Exception:
+    return ""
+  if not isinstance(data, dict):
+    return ""
+  preferred = []
+  others = []
+  for scope, entry in data.items():
+    if not isinstance(entry, dict):
+      continue
+    email = normalize_email(entry.get("email"))
+    if not email:
+      continue
+    if str(scope).startswith("https://auth.x.ai") or str(entry.get("oidc_issuer") or "") == "https://auth.x.ai":
+      preferred.append(email)
+    else:
+      others.append(email)
+  return (preferred or others or [""])[0]
+
+
+def load_cli_profile_email(auth_path, subject):
+  """cli-config.json authInfo.email when authId matches this session subject."""
+  candidates = []
+  if auth_path is not None:
+    candidates.append(auth_path.parent / "cli-config.json")
+  candidates.append(DEFAULT_CLI_CONFIG)
+  seen = set()
+  for path in candidates:
+    try:
+      resolved = path.resolve()
+    except Exception:
+      resolved = path
+    if resolved in seen or not path.is_file():
+      continue
+    seen.add(resolved)
+    try:
+      data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+      continue
+    if not isinstance(data, dict):
+      continue
+    info = data.get("authInfo")
+    if not isinstance(info, dict):
+      continue
+    auth_id = str(info.get("authId") or "").strip()
+    email = info.get("email")
+    if subject and auth_id and auth_id != subject:
+      continue
+    if email:
+      return str(email).strip()
+  return ""
+
+
+def cursor_session_ok(payload, provider, email, grok_email):
+  """Accept any live Cursor session (Pro / Google / GitHub / X)."""
+  if not payload:
+    return False
+  iss = str(payload.get("iss") or "").strip()
+  typ = str(payload.get("type") or "").strip().lower()
+  return iss == CURSOR_ISS and typ in ALLOWED_JWT_TYPES
+
+
+def expired_x_result(creds=None):
+  return empty_result(
+    usageStatusText="Sign in to Cursor",
+    authHelpText="Cursor session expired. Sign in to Cursor again.",
+  )
+
+
+def x_error_result(creds, usage_status, auth_help):
+  return empty_result(
+    usageStatusText=usage_status,
+    authHelpText=auth_help,
+  )
+
+
+def load_cli_auth(auth_path, grok_email=""):
+  if not auth_path.is_file():
+    return None
+  try:
+    data = json.loads(auth_path.read_text(encoding="utf-8"))
+  except Exception:
+    return None
+  if not isinstance(data, dict) or not data:
+    return None
+
+  access = data.get("accessToken") or data.get("access_token") or ""
+  refresh = data.get("refreshToken") or data.get("refresh_token") or ""
+  if not access:
+    return None
+
+  ok, provider, sub, payload = accept_cursor_x_jwt(access)
+  email = load_cli_profile_email(auth_path, sub)
+  if not cursor_session_ok(payload, provider, email, grok_email):
+    return None
+  login_provider = provider if ok else "grok-matched"
+
+  return {
+    "source": "cli",
+    "token": str(access),
+    "refresh_token": str(refresh or ""),
+    "auth_path": auth_path,
+    "auth_data": data,
+    "login_provider": login_provider,
+    "subject": sub,
+    "membership": "",
+    "email": email,
+  }
+
+
+def read_item(conn, key):
+  row = conn.execute(
+    "SELECT value FROM ItemTable WHERE key = ? LIMIT 1",
+    (key,),
+  ).fetchone()
+  if not row or row[0] is None:
+    return None
+  value = row[0]
+  if isinstance(value, bytes):
+    value = value.decode("utf-8", errors="replace")
+  text = str(value).strip()
+  return text or None
+
+
+def load_ide_auth(state_db, grok_email=""):
+  if not state_db.is_file():
+    return None
+
+  try:
+    uri = state_db.resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=2)
+  except sqlite3.Error:
+    return None
+
+  try:
+    conn.execute("PRAGMA query_only = ON")
+    access = read_item(conn, "cursorAuth/accessToken")
+    refresh = read_item(conn, "cursorAuth/refreshToken")
+    membership = read_item(conn, "cursorAuth/stripeMembershipType")
+    signup = read_item(conn, "cursorAuth/cachedSignUpType")
+    cached_email = read_item(conn, "cursorAuth/cachedEmail")
+  except sqlite3.Error:
+    return None
+  finally:
+    conn.close()
+
+  if not access:
+    return None
+
+  ok, provider, sub, payload = accept_cursor_x_jwt(access)
+  email = cached_email or ""
+  if not cursor_session_ok(payload, provider, email, grok_email):
+    return None
+  login_provider = provider if ok else "grok-matched"
+
+  return {
+    "source": "ide",
+    "token": str(access),
+    "refresh_token": str(refresh or ""),
+    "auth_path": None,
+    "auth_data": None,
+    "login_provider": login_provider,
+    "subject": sub,
+    "membership": membership or "",
+    "email": email,
+  }
+
+
+def pick_x_credentials(auth_path, state_db, grok_email=""):
+  cli = load_cli_auth(auth_path, grok_email=grok_email)
+  ide = load_ide_auth(state_db, grok_email=grok_email)
+  if cli and ide:
+    if cli.get("subject") and ide.get("subject") and cli["subject"] != ide["subject"]:
+      return ide
+    if not cli.get("membership") and ide.get("membership"):
+      cli["membership"] = ide["membership"]
+    if not cli.get("email") and ide.get("email"):
+      cli["email"] = ide["email"]
+    return cli
+  return cli or ide
+
+
+def access_needs_refresh(token, skew_sec=REFRESH_SKEW_SEC):
+  payload = decode_jwt(token)
+  if not payload:
+    return True
+  exp = payload.get("exp")
+  if exp is None or exp == "":
+    return False
+  try:
+    exp_dt = datetime.fromtimestamp(int(float(exp)), timezone.utc)
+  except Exception:
+    return True
+  return exp_dt <= datetime.now(timezone.utc) + timedelta(seconds=skew_sec)
+
+
+def access_is_expired(token):
+  payload = decode_jwt(token)
+  if not payload:
+    return True
+  exp = payload.get("exp")
+  if exp is None or exp == "":
+    return False
+  try:
+    exp_dt = datetime.fromtimestamp(int(float(exp)), timezone.utc)
+  except Exception:
+    return True
+  return exp_dt <= datetime.now(timezone.utc)
+
+
+def save_cli_auth(creds):
+  # Refresh stays in memory for this process. The usage record must not write
+  # credentials back to Cursor's auth.json (same rule as the Grok collector).
+  return
+
+
+def refresh_token(creds):
+  refresh = str(creds.get("refresh_token") or "").strip()
+  if not refresh:
+    return False, "no_refresh"
+
+  body = json.dumps({
+    "grant_type": "refresh_token",
+    "client_id": CLIENT_ID,
+    "refresh_token": refresh,
+  }).encode("utf-8")
+  req = urllib.request.Request(
+    TOKEN_URL,
+    data=body,
+    method="POST",
+    headers={
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      "User-Agent": USER_AGENT,
+    },
+  )
+  try:
+    with urllib.request.urlopen(req, timeout=20) as resp:
+      payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+  except urllib.error.HTTPError as exc:
+    if exc.code in (400, 401, 403):
+      return False, "auth"
+    return False, "http"
+  except Exception:
+    return False, "net"
+
+  if not isinstance(payload, dict):
+    return False, "parse"
+  if payload.get("shouldLogout") is True:
+    return False, "logout"
+
+  access = payload.get("access_token") or payload.get("accessToken") or ""
+  if not access:
+    return False, "parse"
+
+  ok, provider, sub, decoded = accept_cursor_x_jwt(access)
+  if ok:
+    login_provider = provider
+  elif decoded and creds.get("login_provider") in {"grok-matched", "x-linked"}:
+    old_sub = str(creds.get("subject") or "")
+    if old_sub and sub and old_sub != sub:
+      return False, "logout"
+    login_provider = "grok-matched"
+  else:
+    return False, "logout"
+
+  creds["token"] = str(access)
+  creds["login_provider"] = login_provider
+  creds["subject"] = sub
+  new_refresh = payload.get("refresh_token") or payload.get("refreshToken")
+  if new_refresh:
+    creds["refresh_token"] = str(new_refresh)
+  save_cli_auth(creds)
+  return True, None
+
+
+def ensure_token(creds):
+  if not access_needs_refresh(creds.get("token")):
+    return True, None
+  ok, reason = refresh_token(creds)
+  if ok:
+    return True, None
+  if reason == "logout" or access_is_expired(creds.get("token")):
+    return False, reason or "auth"
+  # Access JWT still valid enough to try the usage call.
+  return True, None
+
+
+def http_post_json(url, token, body, timeout=20):
+  headers = {
+    "Content-Type": "application/json",
+    "Connect-Protocol-Version": "1",
+    "User-Agent": USER_AGENT,
+  }
+  if token:
+    headers["Authorization"] = f"Bearer {token}"
+  req = urllib.request.Request(
+    url,
+    data=json.dumps(body).encode("utf-8"),
+    method="POST",
+    headers=headers,
+  )
+  try:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+      raw = resp.read().decode("utf-8", errors="replace")
+      status = getattr(resp, "status", 200)
+  except urllib.error.HTTPError as exc:
+    status = exc.code
+    try:
+      exc.read()
+    except Exception:
+      pass
+    if status in (401, 403):
+      return None, "auth", None
+    return None, "http", f"Usage API returned HTTP {status}"
+  except Exception as exc:
+    return None, "net", str(exc)
+
+  if status < 200 or status >= 300:
+    return None, "http", f"Usage API returned HTTP {status}"
+  try:
+    parsed = json.loads(raw)
+  except Exception:
+    return None, "parse", "Could not parse usage response."
+  return parsed, None, None
+
+
+def fetch_period_usage(creds):
+  return http_post_json(
+    f"{API_BASE}/GetCurrentPeriodUsage",
+    creds["token"],
+    {},
+    timeout=20,
+  )
+
+
+def fetch_sand_usage(creds):
+  """Grok Bot weekly included pool (internally Sand)."""
+  return http_post_json(
+    f"{API_BASE}/GetSandUsageStatus",
+    creds["token"],
+    {},
+    timeout=15,
+  )
+
+
+def pick_field(payload, *keys):
+  if not isinstance(payload, dict):
+    return None
+  for key in keys:
+    if key in payload and payload.get(key) is not None:
+      return payload.get(key)
+  return None
+
+
+def fraction_from_percent(value):
+  if value is None or value == "":
+    return -1.0
+  try:
+    number = float(value)
+  except (TypeError, ValueError):
+    return -1.0
+  if not math.isfinite(number):
+    return -1.0
+  return number / 100.0
+
+
+def truthy(value):
+  return value is True or str(value).strip().lower() in {"true", "1"}
+
+
+def apply_sand(out, payload, kind=None):
+  """Add the Grok Bot weekly pool as another stock-panel limit when present."""
+  if kind == "auth" or not isinstance(payload, dict):
+    return out
+
+  has_limit = truthy(pick_field(
+    payload, "hasNonZeroIncludedLimit", "has_non_zero_included_limit",
+  ))
+  if not has_limit:
+    return out
+
+  frac = fraction_from_percent(pick_field(payload, "usagePercent", "usage_percent"))
+  if frac < 0:
+    return out
+
+  reset_dt = parse_when(pick_field(
+    payload, "nextResetTimestampUtc", "next_reset_timestamp_utc",
+  ))
+  limits = list(out.get("limits") or [])
+  limits.append({
+    "label": "Grok Bot",
+    "title": "Grok Bot",
+    "percent": frac,
+    "resetsAt": to_iso(reset_dt),
+  })
+  out["limits"] = limits
+  out["ready"] = True
+  return out
+
+
+def fetch_plan_name(creds):
+  payload, kind, _err = http_post_json(
+    f"{API_BASE}/GetPlanInfo",
+    creds["token"],
+    {},
+    timeout=15,
+  )
+  if kind is not None or not isinstance(payload, dict):
+    return ""
+  info = payload.get("planInfo")
+  if not isinstance(info, dict):
+    return ""
+  return str(info.get("planName") or "").strip()
+
+
+def account_display_name(payload):
+  if not isinstance(payload, dict):
+    return ""
+  name = str(payload.get("name") or "").strip()
+  if name:
+    return name
+  first = str(payload.get("firstName") or payload.get("given_name") or "").strip()
+  last = str(payload.get("lastName") or payload.get("family_name") or "").strip()
+  return " ".join(part for part in (first, last) if part)
+
+
+def fetch_account(creds):
+  payload, kind, _err = http_post_json(
+    f"{API_BASE}/GetMe",
+    creds["token"],
+    {},
+    timeout=15,
+  )
+  if kind is not None or not isinstance(payload, dict):
+    return "", ""
+  email = str(payload.get("email") or "").strip()
+  return account_display_name(payload), email
+
+
+def with_auth_retry(creds, fetch_fn):
+  result, kind, err = fetch_fn(creds)
+  if kind != "auth":
+    return result, kind, err
+  ok, _reason = refresh_token(creds)
+  if not ok:
+    return None, "auth", None
+  return fetch_fn(creds)
+
+
+def parse_when(value):
+  if value is None or value == "":
+    return None
+  if isinstance(value, bool):
+    return None
+  if isinstance(value, (int, float)):
+    number = float(value)
+    if not math.isfinite(number):
+      return None
+    seconds = number / 1000.0 if abs(number) >= 1e11 else number
+    try:
+      return datetime.fromtimestamp(seconds, timezone.utc)
+    except (OverflowError, OSError, ValueError):
+      return None
+
+  text = str(value).strip()
+  if not text:
+    return None
+  if text.isdigit() or (text[0] in "+-" and text[1:].isdigit()):
+    return parse_when(float(text))
+  try:
+    as_float = float(text)
+  except (TypeError, ValueError):
+    as_float = None
+  if as_float is not None and math.isfinite(as_float):
+    # Numeric strings only — ISO dates fail float() or are not plain numbers.
+    stripped = text[1:] if text[0] in "+-" else text
+    if stripped.replace(".", "", 1).isdigit():
+      return parse_when(as_float)
+  return parse_iso(text)
+
+
+def format_tier(value):
+  text = str(value or "").strip()
+  if not text:
+    return ""
+  if any(ch.isupper() for ch in text) and " " in text:
+    return text
+  if any(ch.isupper() for ch in text) and "_" not in text:
+    return text
+  return " ".join(part.capitalize() for part in text.replace("_", " ").split())
+
+
+def percent_from_plan(plan, key):
+  if key not in plan or plan.get(key) is None:
+    return 0.0
+  try:
+    number = float(plan.get(key))
+  except (TypeError, ValueError):
+    return 0.0
+  if not math.isfinite(number):
+    return 0.0
+  return number / 100.0
+
+
+def build_result(creds, payload, tier_label=""):
+  if not isinstance(payload, dict):
+    return x_error_result(
+      creds,
+      "Cursor limits unavailable",
+      "Usage response was not a JSON object.",
+    )
+
+  plan = payload.get("planUsage")
+  if not isinstance(plan, dict):
+    return x_error_result(
+      creds,
+      "Cursor limits unavailable",
+      "Usage response did not include plan usage.",
+    )
+
+  reset_dt = parse_when(payload.get("billingCycleEnd"))
+  reset_iso = to_iso(reset_dt)
+
+  membership = (
+    tier_label
+    or creds.get("membership")
+    or payload.get("membershipType")
+    or ""
+  )
+
+  auto = percent_from_plan(plan, "autoPercentUsed")
+  other = percent_from_plan(plan, "apiPercentUsed")
+  limits = []
+  if auto >= 0:
+    limits.append({"label": "Cursor Models", "title": "Cursor Models", "percent": auto, "resetsAt": reset_iso})
+  if other >= 0:
+    limits.append({"label": "Other Models", "title": "Other Models", "percent": other, "resetsAt": reset_iso})
+  return empty_result(
+    ready=len(limits) > 0,
+    limits=limits,
+    tierLabel=plain_text(format_tier(membership), max_len=80),
+  )
+
+
+def main(argv=None):
+  parser = argparse.ArgumentParser(description="Print the Cursor usage record as JSON")
+  parser.add_argument(
+    "--auth",
+    default=os.environ.get("CURSOR_AUTH_PATH", str(DEFAULT_AUTH)),
+    help="Path to Cursor CLI auth.json (default: ~/.config/cursor/auth.json)",
+  )
+  parser.add_argument(
+    "--state-db",
+    default=os.environ.get("CURSOR_STATE_DB", str(DEFAULT_STATE_DB)),
+    help="Path to Cursor state.vscdb (read-only)",
+  )
+  parser.add_argument(
+    "--grok-auth",
+    default=os.environ.get("GROK_AUTH_PATH", str(DEFAULT_GROK_AUTH)),
+    help="Unused; kept so older wrappers that passed --grok-auth still run",
+  )
+  parser.add_argument("--force", action="store_true", help="ignored; kept for collector CLI parity")
+  parser.add_argument("--limits-only", action="store_true", help="ignored; kept for collector CLI parity")
+  parser.add_argument(
+    "--probe",
+    action="store_true",
+    help="Print ready/absent if a Cursor session exists (no usage API)",
+  )
+  parser.add_argument(
+    "--include-sand",
+    action="store_true",
+    default=True,
+    help=argparse.SUPPRESS,
+  )
+  parser.add_argument(
+    "--no-grok-bot",
+    dest="include_sand",
+    action="store_false",
+    help="Skip the Grok Bot weekly pool on this Cursor account",
+  )
+  args = parser.parse_args(argv)
+
+  auth_path = expand_path(args.auth, DEFAULT_AUTH)
+  state_db = expand_path(args.state_db, DEFAULT_STATE_DB)
+  grok_auth = expand_path(args.grok_auth, DEFAULT_GROK_AUTH)
+  grok_email = load_grok_email(grok_auth)
+  creds = pick_x_credentials(auth_path, state_db, grok_email=grok_email)
+
+  if args.probe:
+    print("ready" if creds else "absent")
+    return 0
+
+  if not creds:
+    return emit(empty_result(authHelpText="Sign in to Cursor to show monthly pools."))
+
+  ok, _reason = ensure_token(creds)
+  if not ok:
+    return emit(expired_x_result(creds))
+
+  payload, kind, err = with_auth_retry(creds, fetch_period_usage)
+  sand = None
+  sand_kind = None
+  if args.include_sand:
+    sand, sand_kind, _sand_err = with_auth_retry(creds, fetch_sand_usage)
+
+  if kind == "auth" and (not args.include_sand or sand_kind == "auth"):
+    return emit(expired_x_result(creds))
+
+  # Plan name is best-effort; usage still stands. Never copy account email
+  # into the printed record.
+  if kind != "auth" or sand_kind != "auth":
+    tier_label = fetch_plan_name(creds)
+  else:
+    tier_label = ""
+
+  if payload is None:
+    out = x_error_result(
+      creds,
+      "Cursor limits unavailable" if kind != "auth" else "Sign in to Cursor",
+      err or (
+        "Cursor session expired. Sign in to Cursor again."
+        if kind == "auth"
+        else "Could not load Cursor period usage."
+      ),
+    )
+  else:
+    out = build_result(creds, payload, tier_label=tier_label)
+
+  if args.include_sand:
+    apply_sand(out, sand, sand_kind)
+  return emit(out)
+
+
+if __name__ == "__main__":
+  sys.exit(main())
