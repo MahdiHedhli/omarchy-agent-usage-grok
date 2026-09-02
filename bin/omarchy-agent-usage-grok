@@ -668,7 +668,13 @@ def parse_product_usage(config: dict[str, Any], resets_at: str) -> list[dict[str
     if percent < 0:
       continue
     seen.add(title)
-    out.append({"label": title, "percent": percent, "resetsAt": resets_at})
+    out.append({
+      "label": title,
+      "title": title,
+      "percent": percent,
+      "resetsAt": resets_at,
+      "kind": "product",
+    })
   return out
 
 
@@ -831,6 +837,7 @@ def parse_billing(payload: dict[str, Any]) -> dict[str, Any]:
       "label": period_label(str((period or {}).get("type") or "")),
       "percent": percent,
       "resetsAt": reset,
+      "kind": "pool",
     })
   result["limits"].extend(parse_product_usage(config, reset))
 

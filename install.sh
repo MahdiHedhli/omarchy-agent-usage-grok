@@ -13,7 +13,6 @@ UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 COLLECTOR_DST="${BIN}/omarchy-agent-usage-grok"
 CURSOR_DST="${BIN}/omarchy-agent-usage-cursor"
 REFRESH_DST="${BIN}/omarchy-agent-usage-grok-refresh"
-PLUGIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/usage.grok"
 
 usage() {
   cat <<'EOF'
@@ -49,24 +48,11 @@ write_usage_json() {
   write_record cursor "$CURSOR_DST" "$@" || true
 }
 
-remove_bar_chip() {
-  # The compact meters live in a separate package. This collector must not
-  # leave a competing usage.grok icon next to omarchy.agents.
-  if command -v omarchy >/dev/null; then
-    omarchy plugin disable usage.grok 2>/dev/null || true
-  fi
-  rm -rf "$PLUGIN_DIR"
-  if command -v omarchy-shell >/dev/null; then
-    omarchy-shell shell rescanPlugins >/dev/null 2>&1 || true
-  fi
-}
-
 uninstall() {
   systemctl --user disable --now omarchy-agent-usage-grok.timer 2>/dev/null || true
   rm -f "$UNIT_DIR/omarchy-agent-usage-grok.service" "$UNIT_DIR/omarchy-agent-usage-grok.timer"
   rm -f "$COLLECTOR_DST" "$CURSOR_DST" "$REFRESH_DST"
   systemctl --user daemon-reload 2>/dev/null || true
-  remove_bar_chip
   echo "Removed user-space Grok/Cursor collectors. Left $STATE/*.json in place."
 }
 
@@ -117,8 +103,6 @@ write_usage_json --force
 
 systemctl --user daemon-reload
 systemctl --user enable --now omarchy-agent-usage-grok.timer
-
-remove_bar_chip
 
 if command -v omarchy-shell >/dev/null; then
   omarchy-shell omarchy.agents refresh >/dev/null 2>&1 || true

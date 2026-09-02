@@ -221,6 +221,10 @@ result=$(HOME="$TEST_HOME" XDG_CACHE_HOME="$TEST_HOME/.cache" GROK_HOME="$TEST_H
   fail "Grok collector maps productUsage into extra limit meters" "$result"
 [[ $(jq -r '.limits[] | select(.label=="Grok Build") | .percent * 100 | round' <<<"$result") == "12" ]] ||
   fail "Grok collector maps Grok Build product percent" "$result"
+[[ $(jq -r '.limits[] | select(.label=="Weekly") | .kind' <<<"$result") == "pool" ]] ||
+  fail "Grok collector tags the weekly window as kind=pool" "$result"
+[[ $(jq -r '[.limits[] | select(.kind=="product") | .label] | join("/")' <<<"$result") == "Grok Build/Chat/Imagine" ]] ||
+  fail "Grok collector tags Build/Chat/Imagine as kind=product" "$result"
 pass "Grok collector maps productUsage into extra limit meters"
 
 # Internal SuperGrokPro enum is rewritten; monthly periods keep their label.

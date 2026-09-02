@@ -31,7 +31,8 @@ spec, plan, and tasks are under `specs/001-grok-usage-collector/`.
   synthetic `task-completed` prompt ids)
 - SuperGrok weekly (or monthly) pool, leftover prepaid credits, and
   grok.com product split (**Grok Build / Chat / Imagine / Voice**) as extra
-  meters the stock panel already draws
+  meters the stock panel already draws (`kind: product`, so a separate bar
+  chip can paint them as a segmented weekly track)
 - Limits from Grok ACP `_x.ai/billing`, with the same CLI-proxy
   `cli-chat-proxy.grok.com` billing endpoint `/usage` uses as a fallback
 - pi / omp (`xai`, `xai-auth`, `xai-oauth`) and OpenCode (`providerID=xai`)
@@ -101,7 +102,7 @@ borrowed from those listings:
 
 | Plugin | What we took |
 |---|---|
-| [calmasacow.grok-usage](https://github.com/calmasacow/omarchy-grok-usage) | Product split meters, skip `task-completed` ids, CLI-proxy billing, same-origin redirects |
+| [calmasacow.grok-usage](https://github.com/calmasacow/omarchy-grok-usage) | Product split meters (Build / Chat / Imagine), skip `task-completed` ids, CLI-proxy billing, same-origin redirects |
 | [dougfour.grok-usage](https://github.com/dougfour/omarchy-grok-usage) | Grok Build / Chat / Imagine as segments of the weekly pool |
 | [vt.grok-usage](https://github.com/vitally/omarchy-grok-usage) | Headless service that only writes `grok.json` |
 | [rlimberger.grokbar-omarchy](https://github.com/rlimberger/grokbar-omarchy) | Reset timestamp, weekly pool, and optional Cursor monthly pools |
