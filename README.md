@@ -2,6 +2,10 @@
 
 Grok usage collector for the [Omarchy](https://omarchy.org/) agents bar.
 
+<p align="left">
+  <img src="docs/screenshot.png" alt="Grok tab on the Omarchy agents panel" width="360">
+</p>
+
 Omarchy already ships collectors for Claude, Codex, and Fireworks. Grok is a
 first-party default coding agent, but `omarchy-agent-usage-update` never
 discovers it, so the bar stays empty for SuperGrok. This repo is that missing
@@ -63,6 +67,15 @@ plus optional `shell/plugins/agents/assets/grok.svg` / `grok-light.svg` and
 `providers.grok` in the agents manifest). Several open PRs already cover this
 gap (`#7200`, `#6902`, …). This repo is the standalone, installable form with
 omp `xai-oauth` included.
+
+## Sharing
+
+- Widget screenshot: [`docs/screenshot.png`](docs/screenshot.png)
+- Open Graph card (1200×630): [`docs/og.png`](docs/og.png)
+- GitHub social preview (1280×640): [`docs/social-preview.png`](docs/social-preview.png)
+
+GitHub has no API for the repo social preview. Upload `docs/social-preview.png` at
+[Settings → Social preview](https://github.com/MahdiHedhli/omarchy-agent-usage-grok/settings).
 
 ## License
 
