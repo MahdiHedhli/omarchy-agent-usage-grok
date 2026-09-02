@@ -8,9 +8,9 @@ Local stats come from session files under $GROK_HOME/sessions (default
 ~/.grok/sessions). Each updates.jsonl turn_completed event is one prompt
 and carries the billed token ledger. pi/omp and opencode sessions that
 ran on an xAI provider are merged in, the same way Claude and Codex pick
-up those agents. The SuperGrok weekly pool, plan label, product splits
-(Grok Build / Chat / Imagine / Voice), and leftover prepaid credits come
-from Grok ACP `_x.ai/billing`, with the same CLI-proxy billing endpoint
+up those agents. The SuperGrok weekly pool, plan label, any product
+rows billing actually reports, and leftover prepaid credits come from
+Grok ACP `_x.ai/billing`, with the same CLI-proxy billing endpoint
 `/usage` uses as a fallback. The agents panel only ever reads the JSON
 this prints.
 """
@@ -52,9 +52,8 @@ PRODUCT_TITLES = {
   "GrokVoice": "Voice",
   "Voice": "Voice",
 }
-# grok.com always shows these four channels. The billing API omits a product
-# (or sends no usagePercent) when it is unused — still draw a 0% meter.
-CANONICAL_PRODUCTS = ("Grok Build", "Chat", "Imagine", "Voice")
+# Product meters follow billing productUsage: skip rows with no usagePercent
+# instead of inventing Chat / Imagine / Voice at 0%.
 
 # Same freshness contract as the Claude/Codex collectors: a scan this recent
 # is only reused to dedup concurrent collector runs. --limits-only reuses the
@@ -662,27 +661,25 @@ def product_limit(title: str, percent: float, resets_at: str) -> dict[str, Any]:
 
 
 def parse_product_usage(config: dict[str, Any], resets_at: str) -> list[dict[str, Any]]:
-  # grok.com splits the weekly pool into products (Grok Build, Chat, Imagine,
-  # Voice). Marketplace collectors surface those as extra limit meters; the
-  # stock panel already knows how to draw extra limits[].
-  found: dict[str, dict[str, Any]] = {}
-  rows = config.get("productUsage")
-  if isinstance(rows, list):
-    for entry in rows:
-      if not isinstance(entry, dict):
-        continue
-      product = str(entry.get("product") or "").strip()
-      title = product_title(product)
-      if title == "" or title in found:
-        continue
-      percent = usage_percent(entry.get("usagePercent"))
-      if percent < 0:
-        percent = 0.0
-      found[title] = product_limit(title, percent, resets_at)
+  # Only emit products billing reported with a percent. Unused channels are
+  # omitted or sent without usagePercent — do not draw those as 0%.
   out: list[dict[str, Any]] = []
-  for title in CANONICAL_PRODUCTS:
-    out.append(found.pop(title, product_limit(title, 0.0, resets_at)))
-  out.extend(found.values())
+  seen: set[str] = set()
+  rows = config.get("productUsage")
+  if not isinstance(rows, list):
+    return out
+  for entry in rows:
+    if not isinstance(entry, dict):
+      continue
+    product = str(entry.get("product") or "").strip()
+    title = product_title(product)
+    if title == "" or title in seen:
+      continue
+    percent = usage_percent(entry.get("usagePercent"))
+    if percent < 0:
+      continue
+    seen.add(title)
+    out.append(product_limit(title, percent, resets_at))
   return out
 
 

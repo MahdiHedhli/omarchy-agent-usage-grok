@@ -30,9 +30,10 @@ spec, plan, and tasks are under `specs/001-grok-usage-collector/`.
   `turn_completed` rows in `updates.jsonl` (skips subagent sessions and
   synthetic `task-completed` prompt ids)
 - SuperGrok weekly (or monthly) pool, leftover prepaid credits, and
-  grok.com product split (**Grok Build / Chat / Imagine / Voice**) as extra
-  meters the stock panel already draws (`kind: product`, so a separate bar
-  chip can paint them as a segmented weekly track)
+  whatever grok.com `productUsage` rows include a percent (often only
+  **Grok Build**). Extra meters use `kind: product` so a separate bar chip
+  can paint them as a segmented weekly track. Products omitted or sent
+  without `usagePercent` are not drawn as 0%.
 - Limits from Grok ACP `_x.ai/billing`, with the same CLI-proxy
   `cli-chat-proxy.grok.com` billing endpoint `/usage` uses as a fallback
 - pi / omp (`xai`, `xai-auth`, `xai-oauth`) and OpenCode (`providerID=xai`)

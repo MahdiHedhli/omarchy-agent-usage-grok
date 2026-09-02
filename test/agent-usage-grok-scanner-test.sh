@@ -217,26 +217,32 @@ pass "Grok collector maps a SuperGrok weekly pool onto the panel meter"
 install_grok_stub '{"config":{"creditUsagePercent":31,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-08-22T23:23:37.992320+00:00"},"productUsage":[{"product":"GrokBuild","usagePercent":12},{"product":"GrokChat","usagePercent":8},{"product":"GrokImagine","usagePercent":2}]},"subscription_tier":"SuperGrok Heavy"}'
 result=$(HOME="$TEST_HOME" XDG_CACHE_HOME="$TEST_HOME/.cache" GROK_HOME="$TEST_HOME/.grok" \
   "$COLLECTOR" --force)
-[[ $(jq -r '[.limits[].label] | join("/")' <<<"$result") == "Weekly/Grok Build/Chat/Imagine/Voice" ]] ||
+[[ $(jq -r '[.limits[].label] | join("/")' <<<"$result") == "Weekly/Grok Build/Chat/Imagine" ]] ||
   fail "Grok collector maps productUsage into extra limit meters" "$result"
 [[ $(jq -r '.limits[] | select(.label=="Grok Build") | .percent * 100 | round' <<<"$result") == "12" ]] ||
   fail "Grok collector maps Grok Build product percent" "$result"
-[[ $(jq -r '.limits[] | select(.label=="Voice") | .percent * 100 | round' <<<"$result") == "0" ]] ||
-  fail "Grok collector still draws omitted SuperGrok channels at 0%" "$result"
 [[ $(jq -r '.limits[] | select(.label=="Weekly") | .kind' <<<"$result") == "pool" ]] ||
   fail "Grok collector tags the weekly window as kind=pool" "$result"
-[[ $(jq -r '[.limits[] | select(.kind=="product") | .label] | join("/")' <<<"$result") == "Grok Build/Chat/Imagine/Voice" ]] ||
-  fail "Grok collector tags Build/Chat/Imagine/Voice as kind=product" "$result"
+[[ $(jq -r '[.limits[] | select(.kind=="product") | .label] | join("/")' <<<"$result") == "Grok Build/Chat/Imagine" ]] ||
+  fail "Grok collector tags reported products as kind=product" "$result"
 pass "Grok collector maps productUsage into extra limit meters"
 
-# Billing often lists only the products that have spend (Build) and omits Chat
-# / Imagine, or sends Voice with no usagePercent. Still emit all four.
+# Billing lists only products with spend (Build) and may send Voice with no
+# usagePercent. Do not invent 0% Chat / Imagine / Voice meters.
 install_grok_stub '{"config":{"creditUsagePercent":17,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-09-04T15:06:02.697721+00:00"},"productUsage":[{"product":"GrokBuild","usagePercent":17},{"product":"GrokVoice"}]},"subscription_tier":"SuperGrok Heavy"}'
 result=$(HOME="$TEST_HOME" XDG_CACHE_HOME="$TEST_HOME/.cache" GROK_HOME="$TEST_HOME/.grok" \
   "$COLLECTOR" --force)
-[[ $(jq -r '[.limits[] | select(.kind=="product") | .label + "=" + ((.percent*100)|round|tostring)] | join("/")' <<<"$result") == "Grok Build=17/Chat=0/Imagine=0/Voice=0" ]] ||
-  fail "Grok collector fills Chat/Imagine/Voice at 0% when billing omits them" "$result"
-pass "Grok collector fills Chat/Imagine/Voice at 0% when billing omits them"
+[[ $(jq -r '[.limits[] | select(.kind=="product") | .label + "=" + ((.percent*100)|round|tostring)] | join("/")' <<<"$result") == "Grok Build=17" ]] ||
+  fail "Grok collector only emits products billing reported with a percent" "$result"
+pass "Grok collector only emits products billing reported with a percent"
+
+# A reported Voice percent still becomes a Voice meter.
+install_grok_stub '{"config":{"creditUsagePercent":40,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","end":"2026-09-04T15:06:02.697721+00:00"},"productUsage":[{"product":"GrokBuild","usagePercent":22},{"product":"GrokVoice","usagePercent":18}]},"subscription_tier":"SuperGrok Heavy"}'
+result=$(HOME="$TEST_HOME" XDG_CACHE_HOME="$TEST_HOME/.cache" GROK_HOME="$TEST_HOME/.grok" \
+  "$COLLECTOR" --force)
+[[ $(jq -r '[.limits[] | select(.kind=="product") | .label + "=" + ((.percent*100)|round|tostring)] | join("/")' <<<"$result") == "Grok Build=22/Voice=18" ]] ||
+  fail "Grok collector maps a reported Voice percent" "$result"
+pass "Grok collector maps a reported Voice percent"
 
 # Internal SuperGrokPro enum is rewritten; monthly periods keep their label.
 install_grok_stub '{"config":{"creditUsagePercent":8,"currentPeriod":{"type":"USAGE_PERIOD_TYPE_MONTHLY","end":"2026-09-01T00:00:00+00:00"}},"subscriptionTier":"SuperGrokPro"}'
