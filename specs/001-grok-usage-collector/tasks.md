@@ -37,5 +37,5 @@
 
 ## Phase 7: Publish
 
-- [ ] T016 Create GitHub repo, push `001-grok-usage-collector`
+- [x] T016 Create GitHub repo, push `001-grok-usage-collector`
 - [x] T017 Document upstream path to `omacom/omarchy` (quattro)
