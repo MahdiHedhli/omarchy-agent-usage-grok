@@ -45,6 +45,11 @@ The panel watches `~/.local/state/omarchy/agents/usage/grok.json` and
 `cursor.json`. Left-click the agents icon; right-click still launches your
 default agent. Cursor stays hidden until you are signed in to Cursor.
 
+`install.sh` also clones stock `omarchy.agents` (QML unchanged) and drops
+`assets/grok.svg` there so the Grok tab uses the same mark convention as
+Claude and Codex. The menubar robot glyph is untouched. Until Omarchy
+packages those assets, that clone is the user-space overlay.
+
 To hide a tab after it has data:
 
 ```bash

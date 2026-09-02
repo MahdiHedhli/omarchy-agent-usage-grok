@@ -48,6 +48,28 @@ write_usage_json() {
   write_record cursor "$CURSOR_DST" "$@" || true
 }
 
+# Stock omarchy.agents resolves assets/<id>.svg next to Panel.qml — the same
+# convention Claude and Codex use. Packaged agents has no grok.svg, and we
+# must not edit /usr/share/omarchy. Clone the panel (QML untouched) and drop
+# the Grok mark into the clone's assets/.
+install_agent_marks() {
+  local plugins="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
+  local clone_id="${USER:-$(id -un)}.agents"
+  local dest="$plugins/$clone_id"
+  [[ -f $ROOT/assets/grok.svg ]] || return 0
+  if [[ ! -d $dest ]] && command -v omarchy >/dev/null; then
+    omarchy plugin clone omarchy.agents || true
+  fi
+  [[ -d $dest ]] || dest=$(find "$plugins" -maxdepth 1 -type d -name '*.agents' 2>/dev/null | head -1)
+  [[ -n ${dest:-} && -d $dest ]] || return 0
+  mkdir -p "$dest/assets"
+  install -m 644 "$ROOT/assets/grok.svg" "$dest/assets/grok.svg"
+  if [[ -f $ROOT/assets/grok-light.svg ]]; then
+    install -m 644 "$ROOT/assets/grok-light.svg" "$dest/assets/grok-light.svg"
+  fi
+  echo "Installed Grok mark in $dest/assets (agents panel hero, not the bar glyph)"
+}
+
 uninstall() {
   systemctl --user disable --now omarchy-agent-usage-grok.timer 2>/dev/null || true
   rm -f "$UNIT_DIR/omarchy-agent-usage-grok.service" "$UNIT_DIR/omarchy-agent-usage-grok.timer"
@@ -103,6 +125,8 @@ write_usage_json --force
 
 systemctl --user daemon-reload
 systemctl --user enable --now omarchy-agent-usage-grok.timer
+
+install_agent_marks || true
 
 if command -v omarchy-shell >/dev/null; then
   omarchy-shell omarchy.agents refresh >/dev/null 2>&1 || true
