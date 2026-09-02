@@ -6,7 +6,7 @@
 
 **Status**: Active
 
-**Input**: Add a Grok usage collector so the Omarchy agents bar shows SuperGrok weekly limits, prepaid credits, and local token stats next to Claude, Codex, and Fireworks. Install it on this machine for testing. Document the work with GitHub Spec Kit. Publish a GitHub repo and prepare an upstream contribution to Omarchy.
+**Input**: Add a Grok usage collector so the Omarchy agents bar shows SuperGrok weekly limits, prepaid credits, and local token stats next to Claude, Codex, and Fireworks.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -59,17 +59,17 @@ A SuperGrok subscription used through pi, omp (including `xai-oauth`), or OpenCo
 
 ---
 
-### User Story 4 - Install on this machine and keep the panel fresh (Priority: P1)
+### User Story 4 - User-space install until Omarchy packages the collector (Priority: P1)
 
-The collector is installed on this Omarchy host so the live agents bar shows Grok without waiting for an Omarchy package update.
+An Omarchy user can install the collector without waiting for a package update, so the agents bar shows Grok from billed local sessions.
 
-**Why this priority**: The user asked to test it here.
+**Why this priority**: Packaged `omarchy-agent-usage-update` only discovers collectors under `$OMARCHY_PATH/bin`.
 
-**Independent Test**: Run `./install.sh`, confirm `~/.local/state/omarchy/agents/usage/grok.json` exists with `ready: true` and live session stats.
+**Independent Test**: Run `./install.sh` against a fixture or real `$GROK_HOME`, confirm `~/.local/state/omarchy/agents/usage/grok.json` exists with `ready: true` when usage is present.
 
 **Acceptance Scenarios**:
 
-1. **Given** this machine's `~/.grok/sessions`, **When** install runs, **Then** `grok.json` is written atomically and the agents panel can refresh onto it.
+1. **Given** billed sessions under `$GROK_HOME/sessions`, **When** install runs, **Then** `grok.json` is written atomically and the agents panel can refresh onto it.
 2. **Given** a user-space install, **When** Omarchy later ships the collector, **Then** the user-space files can be removed without leftover wrappers breaking packaged update.
 
 ---
@@ -97,7 +97,7 @@ The collector is installed on this Omarchy host so the live agents bar shows Gro
 - **FR-007**: Probe Grok ACP `_x.ai/billing` via `grok agent --no-leader stdio`.
 - **FR-008**: Treat ACP money `val` as integer cents.
 - **FR-009**: Never write tokens or `auth.json` into the record or cache.
-- **FR-010**: Provide `install.sh` that writes `grok.json` on this host and a timer to refresh it.
+- **FR-010**: Provide `install.sh` that writes `grok.json` and a user timer to refresh it.
 - **FR-011**: Ship optional `assets/grok.svg` and `assets/grok-light.svg` using the official mark.
 
 ### Key Entities
@@ -112,6 +112,6 @@ The collector is installed on this Omarchy host so the live agents bar shows Gro
 ### Measurable Outcomes
 
 - **SC-001**: Fixture test suite exits 0 with no live network.
-- **SC-002**: On this host, `grok.json` exists after install with `ready: true` and `totalPrompts > 0`.
+- **SC-002**: After install against a home with billed Grok sessions, `grok.json` exists with `ready: true` and `totalPrompts > 0`.
 - **SC-003**: Weekly percent matches Grok `/usage` within 1 percentage point on a signed-in SuperGrok account.
 - **SC-004**: Collector is a single stdlib Python file drop-in compatible with `omarchy-agent-usage-update`.

@@ -32,7 +32,7 @@
 ## Phase 6: User Story 4 — install here (P1)
 
 - [x] T013 [US4] `install.sh` + systemd user timer
-- [x] T014 [US4] Run install on this host and verify `grok.json`
+- [x] T014 [US4] Run install on a local Omarchy install and verify `grok.json`
 - [x] T015 [US4] Refresh `omarchy.agents` and confirm the record is ready
 
 ## Phase 7: Publish

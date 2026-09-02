@@ -24,7 +24,7 @@ spec, plan, and tasks are under `specs/001-grok-usage-collector/`.
 The panel watches `~/.local/state/omarchy/agents/usage/grok.json`. Left-click
 the agents icon; right-click still launches your default agent.
 
-## Install on Omarchy (this machine)
+## Install on Omarchy
 
 ```bash
 ./test/agent-usage-grok-scanner-test.sh

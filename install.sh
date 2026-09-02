@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the Grok usage collector for the Omarchy agents panel on this host.
+# Install the Grok usage collector for the Omarchy agents panel.
 # Writes ~/.local/state/omarchy/agents/usage/grok.json and a user timer so the
 # tab stays fresh without waiting for Omarchy to package the collector.
 set -euo pipefail

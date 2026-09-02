@@ -7,7 +7,7 @@
 Ship `bin/omarchy-agent-usage-grok`, a Claude/Codex-shaped collector. Local
 stats from Grok Build `updates.jsonl` plus pi/omp/OpenCode xAI rows. Limits
 from ACP `_x.ai/billing`. User-space `install.sh` writes `grok.json` so the
-Omarchy 4.0.2 agents panel lights up before the collector is packaged.
+agents panel lights up before the collector is packaged.
 
 ## Technical Context
 

@@ -9,7 +9,7 @@ wrote it — so a user-space writer is enough to light the tab.
 
 Packaged collectors today: `claude`, `codex`, `fireworks`. No `grok`.
 
-## Grok Build session format (verified on this host, Grok CLI current)
+## Grok Build session format
 
 Sessions live at `~/.grok/sessions/<url-encoded-cwd>/<session-id>/`.
 Billed usage is on `updates.jsonl` rows:
