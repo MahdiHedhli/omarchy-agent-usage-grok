@@ -19,9 +19,13 @@ spec, plan, and tasks are under `specs/001-grok-usage-collector/`.
 ## What it shows
 
 - Local token stats from `$GROK_HOME/sessions` (default `~/.grok`) billed
-  `turn_completed` rows in `updates.jsonl`
-- SuperGrok weekly (or monthly) pool and leftover prepaid credits from Grok
-  ACP `_x.ai/billing` — the same source `/usage` uses
+  `turn_completed` rows in `updates.jsonl` (skips subagent sessions and
+  synthetic `task-completed` prompt ids)
+- SuperGrok weekly (or monthly) pool, leftover prepaid credits, and
+  grok.com product split (**Grok Build / Chat / Imagine / Voice**) as extra
+  meters the stock panel already draws
+- Limits from Grok ACP `_x.ai/billing`, with the same CLI-proxy
+  `cli-chat-proxy.grok.com` billing endpoint `/usage` uses as a fallback
 - pi / omp (`xai`, `xai-auth`, `xai-oauth`) and OpenCode (`providerID=xai`)
   sessions that burned the same subscription
 
@@ -59,6 +63,22 @@ until Omarchy ships the collector.
 Fixture-only: no live xAI network. Covers nested and flat turns, cache split,
 subagent skip, cents-vs-dollars prepaid, pi/omp/OpenCode merge, and cache
 behavior.
+
+## Related marketplace plugins
+
+plugins.omarchy.org already lists several Grok usage widgets. This repo stays
+a **collector** for stock `omarchy.agents` (no second bar icon). Features
+borrowed from those listings:
+
+| Plugin | What we took |
+|---|---|
+| [calmasacow.grok-usage](https://github.com/calmasacow/omarchy-grok-usage) | Product split meters, skip `task-completed` ids, CLI-proxy billing, same-origin redirects |
+| [dougfour.grok-usage](https://github.com/dougfour/omarchy-grok-usage) | Grok Build / Chat / Imagine as segments of the weekly pool |
+| [vt.grok-usage](https://github.com/vitally/omarchy-grok-usage) | Headless service that only writes `grok.json` |
+| [rlimberger.grokbar-omarchy](https://github.com/rlimberger/grokbar-omarchy) | Reset timestamp + weekly pool as the primary meter |
+
+We did **not** copy account email, token refresh write-back, or a forked QML
+panel. Those belong in a widget, not in the usage record.
 
 ## Upstream
 

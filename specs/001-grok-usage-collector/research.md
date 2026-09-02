@@ -35,8 +35,10 @@ rewrites to `SuperGrok Pro`.
 ## Prior art
 
 Open PRs on `omacom/omarchy` already attempt this (`#7200`, `#6902`, others).
-This repo is a standalone, installable collector plus Spec Kit docs, with
-`xai-oauth` included for omp. Upstream submission reuses this `bin/` file.
+plugins.omarchy.org also lists collector-style Grok plugins (`calmasacow.grok-usage`,
+`vt.grok-usage`, `dougfour.grok-usage`) and bar forks (`rlimberger.grokbar-omarchy`,
+`othavi0.agent-bar`). This collector borrows product-split meters, `task-completed`
+skip, and CLI-proxy billing fallback from those listings without forking QML.
 
 ## User-space discovery
 
